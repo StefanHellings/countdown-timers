@@ -83,3 +83,4 @@ gnome-extensions prefs countdown-timers@stefanhellings.github.com
 ## Notes
 
 - Tested on Fedora Linux 43 (Workstation Edition) with GNOME 49.5
+- Included some soundfiles I downloaded from pixabay.com
