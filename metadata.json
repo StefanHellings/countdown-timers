@@ -1,0 +1,10 @@
+{
+    "name": "Countdown Timers",
+    "description": "Multiple countdown timers in the panel. Supports duration (\"1 2:30:00\") and target time (\"@14:30\") formats.",
+    "uuid": "countdown-timers@stefanhellings.github.com",
+    "shell-version": [
+        "49"
+    ],
+    "version": 1,
+    "url": ""
+}

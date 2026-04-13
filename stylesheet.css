@@ -1,0 +1,66 @@
+/* Countdown Timers — stylesheet.css */
+
+/* ── Panel container (holds one or more timer labels) ── */
+.countdown-panel-box {
+    spacing: 0;
+}
+
+/* ── Individual timer label in the panel ── */
+.countdown-panel-label {
+    font-weight: bold;
+    padding: 0 3px;
+}
+
+/* ── Separator between timers when show-all is on ── */
+.countdown-panel-divider {
+    color: alpha(white, 0.5);
+    padding: 0;
+}
+
+/* ── Input row entries ── */
+.countdown-entry {
+    min-width: 140px;
+    margin-right: 6px;
+}
+
+.countdown-entry-name {
+    min-width: 100px;
+}
+
+/* ── Timer time display ── */
+.countdown-time-label {
+    font-family: monospace;
+    font-size: 1em;
+    font-weight: bold;
+    min-width: 90px;
+}
+
+/* ── Optional user label ── */
+.countdown-name-label {
+    font-style: italic;
+    color: #aaa;
+    margin-left: 8px;
+}
+
+/* ── Control buttons (pause/delete/add) ── */
+.countdown-btn {
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-left: 4px;
+    min-width: 28px;
+}
+
+.countdown-btn-delete {
+    color: #e06c75;
+}
+
+.countdown-btn-add {
+    font-weight: bold;
+}
+
+/* ── Error feedback ── */
+.countdown-error-label {
+    color: #e06c75;
+    font-size: 0.85em;
+    white-space: pre;      /* preserve newlines in multi-line error messages */
+}

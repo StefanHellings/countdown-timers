@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.countdown-timers"
+          path="/org/gnome/shell/extensions/countdown-timers/">
+
+    <!--
+      Timers are stored as a JSON array serialised into a single string.
+      Each entry looks like:
+      {
+        "id":        "abc123",          // unique random ID
+        "label":     "Coffee",          // user-supplied name (optional)
+        "endEpoch":  1700000000,        // Unix timestamp (seconds) when it expires
+        "paused":    false,             // whether the timer is currently paused
+        "remaining": 300,               // seconds left *at the moment it was paused*
+        "finished":  false              // true once the alarm has fired
+      }
+      Using epoch time means the countdown keeps running while the screen is locked
+      or the user is logged out temporarily.
+    -->
+    <key name="timers-json" type="s">
+      <default>""</default>
+      <summary>Serialised timer state</summary>
+      <description>JSON array of all active countdown timers.</description>
+    </key>
+
+    <!--
+      Absolute path to a custom alarm sound file (mp3, ogg, wav, flac, …).
+      Empty string means "use the system default".
+    -->
+    <key name="alarm-sound-path" type="s">
+      <default>""</default>
+      <summary>Custom alarm sound file path</summary>
+      <description>
+        Absolute path to an audio file played when a timer expires.
+        Leave empty to use the system default alert sound.
+      </description>
+    </key>
+
+    <!--
+      When true, every running (non-paused, non-finished) timer is shown as a
+      separate label in the panel bar, separated by a thin divider.
+      When false (default), only the nearest timer is shown.
+    -->
+    <key name="show-all-in-panel" type="b">
+      <default>false</default>
+      <summary>Show all countdowns in the panel</summary>
+      <description>
+        Display every active countdown simultaneously in the top bar
+        instead of only the nearest one.
+      </description>
+    </key>
+
+  </schema>
+</schemalist>
