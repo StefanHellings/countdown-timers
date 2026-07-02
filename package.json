@@ -16,5 +16,9 @@
   "main": "extension.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3.3.5",
+    "@stylistic/eslint-plugin": "^5.10.0"
   }
 }
