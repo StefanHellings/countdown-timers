@@ -1,0 +1,20 @@
+{
+  "name": "countdown-timers",
+  "version": "1.0.0",
+  "description": "Gnome extension - Multiple countdown timers in the panel. Supports duration (\\\"1 2:30:00\\\") and target time (\\\"@14:30\\\") formats.",
+  "homepage": "https://github.com/StefanHellings/countdown-timers#readme",
+  "bugs": {
+    "url": "https://github.com/StefanHellings/countdown-timers/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/StefanHellings/countdown-timers.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "extension.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
