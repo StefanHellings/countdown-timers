@@ -3,6 +3,7 @@
 A GNOME Shell extension that lets you run multiple countdown timers directly from the top panel bar.
 
 ![GNOME Shell 49](https://img.shields.io/badge/GNOME%20Shell-49-blue)
+![GNOME Shell 50](https://img.shields.io/badge/GNOME%20Shell-50-blue)
 
 ---
 
@@ -82,5 +83,7 @@ gnome-extensions prefs countdown-timers@stefanhellings.github.com
 
 ## Notes
 
-- Tested on Fedora Linux 43 (Workstation Edition) with GNOME 49.5
+- Tested on
+  - Fedora Linux 43 (Workstation Edition) with GNOME 49.5
+  - Fedora Linux 44 (Workstation Edition) with GNOME 50
 - Included some soundfiles I downloaded from pixabay.com
