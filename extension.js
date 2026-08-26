@@ -167,15 +167,18 @@ const TimerRow = GObject.registerClass(
 
             // pause / play
             this._pauseBtn = new St.Button({
-                label: timerObj.paused
-                    ? '▶'
-                    : '⏸',
+                label: this._timer.finished
+                    ? '↻'
+                    : this._timer.paused
+                        ? '▶'
+                        : '⏸',
                 style_class: 'countdown-btn',
                 y_align: Clutter.ActorAlign.CENTER,
             });
 
             this._pauseBtn.connect('clicked', () => {
-                if (this._timer.paused) callbacks.onPlay(this._timer.id);
+                if (this._timer.finished) callbacks.onRestart(this._timer.id);
+                else if (this._timer.paused) callbacks.onPlay(this._timer.id);
                 else callbacks.onPause(this._timer.id);
             });
 
@@ -202,13 +205,16 @@ const TimerRow = GObject.registerClass(
         tick() {
             this._timeLabel.set_text(
                 this._timer.finished
-                    ? _('Finished!')
+                    ? _('Finished!!!')
                     : formatRemaining(this._remaining()),
             );
 
-            this._pauseBtn.set_label(this._timer.paused
-                ? '▶'
-                : '⏸',
+            this._pauseBtn.set_label(
+                this._timer.finished
+                    ? '↻'
+                    : this._timer.paused
+                        ? '▶'
+                        : '⏸',
             );
         }
     });
@@ -314,10 +320,10 @@ const CountdownIndicator = GObject.registerClass(
             }
 
             // Sort ascending so the nearest timer always appears leftmost
-            const sorted = [ ...running ].sort((a, b) => a.endEpoch - b.endEpoch);
+            const sorted = [...running].sort((a, b) => a.endEpoch - b.endEpoch);
             const subset = showAll
                 ? sorted
-                : [ sorted[0] ];
+                : [sorted[0]];
 
             subset.forEach((t, i) => {
                 if (i > 0) {
@@ -361,6 +367,7 @@ const CountdownIndicator = GObject.registerClass(
                 const row = new TimerRow(t, {
                     onPause: id => { this._ext.pauseTimer(id); this._rebuildRows(); },
                     onPlay: id => { this._ext.playTimer(id); this._rebuildRows(); },
+                    onRestart: id => { this._ext.restartTimer(id); this._rebuildRows(); },
                     onDelete: id => { this._ext.deleteTimer(id); this._rebuildRows(); },
                 });
 
@@ -373,7 +380,7 @@ const CountdownIndicator = GObject.registerClass(
             this._ext.checkFinished();
             const timers = this._ext.getTimers();
 
-            for (const [ id, row ] of this._rows) {
+            for (const [id, row] of this._rows) {
                 const t = timers.find(x => x.id === id);
 
                 if (t) { row._timer = t; row.tick(); }
@@ -414,7 +421,7 @@ const CountdownIndicator = GObject.registerClass(
 
             super.destroy();
         }
-    }
+    },
 );
 
 /* Main Extension class */
@@ -451,15 +458,18 @@ export default class CountdownTimersExtension extends Extension {
     }
 
     addTimer(endEpoch, label) {
+        const now = Math.floor(Date.now() / 1000);
         const timers = this.getTimers();
+        const duration = Math.max(0, endEpoch - now);
 
         timers.push({
             id: randomId(),
             label: label || null,
             endEpoch,
             paused: false,
-            remaining: endEpoch - Math.floor(Date.now() / 1000),
+            remaining: duration,
             finished: false,
+            duration,
         });
 
         this._saveTimers(timers);
@@ -491,6 +501,25 @@ export default class CountdownTimersExtension extends Extension {
         this._saveTimers(this.getTimers().filter(x => x.id !== id));
     }
 
+    // TODO: Restart timer
+    restartTimer(id) {
+        const timers = this.getTimers();
+        const t = timers.find(x => x.id === id);
+
+        if (t && t.finished) {
+            const now = Math.floor(Date.now() / 1000);
+            const duration = Number.isFinite(t.duration)
+                ? t.duration
+                : Math.max(0, t.endEpoch - now);
+
+            t.finished = false;
+            t.paused = false;
+            t.remaining = duration;
+            t.endEpoch = now + duration;
+            this._saveTimers(timers);
+        }
+    }
+
     checkFinished() {
         const timers = this.getTimers();
         const now = Math.floor(Date.now() / 1000);
@@ -519,7 +548,7 @@ export default class CountdownTimersExtension extends Extension {
                  * User has configured a custom sound file.
                  * Try paplay (PulseAudio / PipeWire) then aplay (ALSA).
                  */
-                for (const cmd of [ [ 'paplay', customPath ], [ 'aplay', customPath ] ]) {
+                for (const cmd of [['paplay', customPath], ['aplay', customPath]]) {
                     try {
                         GLib.spawn_async(
                             null, cmd, null,
@@ -529,7 +558,7 @@ export default class CountdownTimersExtension extends Extension {
 
                         return;
                     } catch {
-                        console.warn("Can't play user configured sound. Trying next one.");
+                        console.warn('Can\'t play user configured sound. Trying next one.');
                     }
                 }
 
@@ -538,10 +567,10 @@ export default class CountdownTimersExtension extends Extension {
 
             // Default system sound candidates (tried in order)
             for (const cmd of [
-                [ 'canberra-gtk-play', '-i', 'complete' ],
-                [ 'paplay', '/usr/share/sounds/freedesktop/stereo/complete.oga' ],
-                [ 'paplay', '/usr/share/sounds/freedesktop/stereo/bell.oga' ],
-                [ 'bash', '-c', 'echo -e "\\a"' ],
+                ['canberra-gtk-play', '-i', 'complete'],
+                ['paplay', '/usr/share/sounds/freedesktop/stereo/complete.oga'],
+                ['paplay', '/usr/share/sounds/freedesktop/stereo/bell.oga'],
+                ['bash', '-c', 'echo -e "\\a"'],
             ]) {
                 try {
                     GLib.spawn_async(
@@ -552,7 +581,7 @@ export default class CountdownTimersExtension extends Extension {
 
                     return;
                 } catch {
-                    console.warn("Can't play system sound. Trying next one.");
+                    console.warn('Can\'t play system sound. Trying next one.');
                 }
             }
         } catch (e) {
