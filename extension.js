@@ -239,7 +239,7 @@ const ActiveTimerRow = GObject.registerClass(
                     : this._timer.paused
                         ? '▶'
                         : '⏸',
-           );
+            );
         }
     });
 
@@ -639,6 +639,7 @@ export default class CountdownTimersExtension extends Extension {
     addTimer(endEpoch, label, sourceInput = null, sourceType = null) {
         const now = Math.floor(Date.now() / 1000);
         const timers = this.getTimers();
+        const duration = Math.max(0, endEpoch - now);
 
         timers.push({
             id: randomId(),
@@ -649,6 +650,7 @@ export default class CountdownTimersExtension extends Extension {
             paused: false,
             remaining: Math.max(0, endEpoch - now),
             finished: false,
+            duration,
         });
 
         this._saveTimers(timers);
@@ -678,6 +680,25 @@ export default class CountdownTimersExtension extends Extension {
 
     deleteTimer(id) {
         this._saveTimers(this.getTimers().filter(x => x.id !== id));
+    }
+
+    // TODO: Restart timer
+    restartTimer(id) {
+        const timers = this.getTimers();
+        const t = timers.find(x => x.id === id);
+
+        if (t && t.finished) {
+            const now = Math.floor(Date.now() / 1000);
+            const duration = Number.isFinite(t.duration)
+                ? t.duration
+                : Math.max(0, t.endEpoch - now);
+
+            t.finished = false;
+            t.paused = false;
+            t.remaining = duration;
+            t.endEpoch = now + duration;
+            this._saveTimers(timers);
+        }
     }
 
     checkFinished() {
