@@ -1,21 +1,29 @@
 /**
- * Countdown Timers — extension.js
+ * Countdown Timers — extension.js  (v2)
  *
- * Supported input formats
- * ────────────────────────
- *   Duration mode  :  [days ]hh:mm:ss   or   [days ]hh:mm
- *                     e.g.  "1 2:30:00"  ->  1 day + 2 h 30 min
- *                           "0:05"       ->  5 minutes
+ * Input formats
+ * ─────────────
+ *   Duration  :  [D ]HH:MM[:SS]    e.g. "0:25", "1:30:00", "1 2:30:00"
+ *   Target    :  @HH:MM[:SS]       e.g. "@14:30", "@08:00:00"
  *
- *   Target mode    :  @hh:mm   or   @hh:mm:ss
- *                     e.g.  "@14:30"     ->  count down to 14:30 today
- *                           "@08:00:00"  ->  count down to 08:00 today
- *                     If the target time is already past, it wraps to tomorrow.
+ * Panel popup layout
+ * ──────────────────
+ *   ┌─ [input field] [label field] [Add] ─────────────────────┐
+ *   │  (error line, hidden unless there's a parse error)       │
+ *   ├──────────────────────────────────────────────────────────┤
+ *   │  HH:MM:SS  LabelName            ⏸  ✕   ← active timers  │
+ *   │  …                                                       │
+ *   ├──────────────────────────────────────────────────────────┤
+ *   │  SAVED TIMERS                                            │
+ *   │  ▶ Pomodoro (0:25:00)                          ✕         │
+ *   │  ▶ Short break (0:05:00)                       ✕         │
+ *   └──────────────────────────────────────────────────────────┘
  */
 
 import GObject from 'gi://GObject';
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -48,8 +56,12 @@ function formatRemaining(totalSeconds) {
 }
 
 /**
- * Parse the user's input string.
- * Returns { ok: true, endEpoch } on success, { ok: false, error } on failure.
+ * Parse a raw input string into an endEpoch timestamp.
+ * Returns { ok: true, endEpoch, type: 'target'|'duration' }
+ *      or { ok: false, error }.
+ *
+ * type is stored on presets so the UI can show whether relaunching
+ * will count to a wall-clock time ('target') or a fixed span ('duration').
  */
 function parseInput(raw) {
     const s = raw.trim();
@@ -73,23 +85,22 @@ function parseInput(raw) {
         }
 
         const gdt = GLib.DateTime.new_now_local();
-        const target = GLib.DateTime.new_local(
+        let epoch = GLib.DateTime.new_local(
             gdt.get_year(),
             gdt.get_month(),
             gdt.get_day_of_month(),
             h,
             m,
             sec,
-        );
+        ).to_unix();
 
-        let targetEpoch = target.to_unix();
-
-        if (targetEpoch <= now)
-            targetEpoch += 86400; // already past -> tomorrow
+        if (epoch <= now)
+            epoch += 86400; // already past -> tomorrow
 
         return {
             ok: true,
-            endEpoch: targetEpoch,
+            type: 'target',
+            endEpoch: epoch,
         };
     }
 
@@ -124,6 +135,7 @@ function parseInput(raw) {
 
         return {
             ok: true,
+            type: 'duration',
             endEpoch: now + totalSec,
         };
     }
@@ -134,9 +146,9 @@ function parseInput(raw) {
     };
 }
 
-/* TimerRow — one row inside the popup menu */
-const TimerRow = GObject.registerClass(
-    class TimerRow extends PopupMenu.PopupBaseMenuItem {
+/* ActiveTimerRow — one running-timer row */
+const ActiveTimerRow = GObject.registerClass(
+    class ActiveTimerRow extends PopupMenu.PopupBaseMenuItem {
         _init(timerObj, callbacks) {
             super._init({ reactive: false });
 
@@ -164,6 +176,18 @@ const TimerRow = GObject.registerClass(
             const spacer = new St.Widget({ x_expand: true });
 
             this.add_child(spacer);
+
+            // Save button — only shown when the timer has a label and a recoverable input
+            if (timerObj.sourceInput) {
+                const saveBtn = new St.Button({
+                    label: '🔖',
+                    style_class: 'countdown-btn countdown-btn-save',
+                    y_align: Clutter.ActorAlign.CENTER,
+                });
+
+                saveBtn.connect('clicked', () => callbacks.onSave(timerObj.id));
+                this.add_child(saveBtn);
+            }
 
             // pause / play
             this._pauseBtn = new St.Button({
@@ -205,7 +229,7 @@ const TimerRow = GObject.registerClass(
         tick() {
             this._timeLabel.set_text(
                 this._timer.finished
-                    ? _('Finished!!!')
+                    ? _('Finished!')
                     : formatRemaining(this._remaining()),
             );
 
@@ -215,7 +239,93 @@ const TimerRow = GObject.registerClass(
                     : this._timer.paused
                         ? '▶'
                         : '⏸',
-            );
+           );
+        }
+    });
+
+/* SavedTimerRow — one preset row */
+const SavedTimerRow = GObject.registerClass(
+    class SavedTimerRow extends PopupMenu.PopupBaseMenuItem {
+        _init(preset, callbacks) {
+            // reactive: true so the whole row is a click target to launch the timer
+            super._init({ reactive: true });
+            this._preset = preset;
+
+            // Launch icon
+            this.add_child(new St.Label({
+                text: '▶',
+                y_align: Clutter.ActorAlign.CENTER,
+                style_class: 'countdown-saved-play-icon',
+            }));
+
+            // Name + input hint + type badge
+            const nameBox = new St.BoxLayout({
+                vertical: true,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true,
+            });
+
+            nameBox.add_child(new St.Label({
+                text: preset.label,
+                style_class: 'countdown-saved-label',
+            }));
+
+            // Second line: input string + a small badge clarifying behaviour
+            const hintBox = new St.BoxLayout({ vertical: false });
+
+            hintBox.add_child(new St.Label({
+                text: preset.input,
+                style_class: 'countdown-saved-hint',
+            }));
+
+            /*
+             * Badge explains what "launch" will do:
+             *   duration → always counts down the same fixed span from now
+             *   target   → always counts to the next occurrence of that wall-clock time
+             */
+            const badgeText = preset.type === 'target'
+                ? _('→ next occurrence')
+                : _('→ fixed duration');
+
+            const badgeClass = preset.type === 'target'
+                ? 'countdown-saved-badge countdown-saved-badge-target'
+                : 'countdown-saved-badge countdown-saved-badge-duration';
+
+            hintBox.add_child(new St.Label({
+                text: '  ' + badgeText,
+                style_class: badgeClass,
+            }));
+
+            nameBox.add_child(hintBox);
+            this.add_child(nameBox);
+
+            const spacer = new St.Widget({ x_expand: true });
+
+            this.add_child(spacer);
+
+            // Delete preset button
+            const delBtn = new St.Button({
+                label: '✕',
+                style_class: 'countdown-btn countdown-btn-delete',
+                y_align: Clutter.ActorAlign.CENTER,
+            });
+
+            delBtn.connect('clicked', (btn) => {
+                // Stop the click from also triggering the row's activate
+                btn.stop_emission_by_name('clicked');
+
+                // Use an idle to avoid mutating the menu mid-event
+                GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    callbacks.onDelete(preset.id);
+
+                    return GLib.SOURCE_REMOVE;
+                });
+            });
+
+            this.add_child(delBtn);
+
+            // Row click → launch a new active timer
+            this.connect('activate', () => callbacks.onLaunch(preset));
         }
     });
 
@@ -274,23 +384,45 @@ const CountdownIndicator = GObject.registerClass(
             // Error label
             this._errorItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
             this._errorLabel = new St.Label({ text: '', style_class: 'countdown-error-label' });
+
             this._errorItem.add_child(this._errorLabel);
             this._errorItem.hide();
             this.menu.addMenuItem(this._errorItem);
+
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-            // Timer rows section
-            this._timersSection = new PopupMenu.PopupMenuSection();
-            this.menu.addMenuItem(this._timersSection);
+            // Active timers section
+            this._activeSection = new PopupMenu.PopupMenuSection();
+            this.menu.addMenuItem(this._activeSection);
 
-            // Re-render panel bar immediately when setting changes
+            // Saved timers section — header + rows
+            this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+            this._savedHeader = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+
+            this._savedHeader.add_child(new St.Label({
+                text: _('SAVED TIMERS'),
+                style_class: 'countdown-section-header',
+            }));
+
+            this._savedSection = new PopupMenu.PopupMenuSection();
+            this.menu.addMenuItem(this._savedHeader);
+            this.menu.addMenuItem(this._savedSection);
+
+            // React to setting changes instantly
             this._showAllSignal = extension.settings.connect(
                 'changed::show-all-in-panel',
                 () => this._updatePanelDisplay(extension.getTimers()),
             );
 
-            this._rows = new Map();
-            this._rebuildRows();
+            this._savedSignal = extension.settings.connect(
+                'changed::saved-timers-json',
+                () => this._rebuildSavedRows(),
+            );
+
+            this._activeRows = new Map();
+            this._rebuildActiveRows();
+            this._rebuildSavedRows();
 
             // 1-second tick
             this._tickId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
@@ -348,15 +480,15 @@ const CountdownIndicator = GObject.registerClass(
             });
         }
 
-        // Timer rows
-        _rebuildRows() {
-            this._timersSection.removeAll();
-            this._rows.clear();
+        // Active timers
+        _rebuildActiveRows() {
+            this._activeSection.removeAll();
+            this._activeRows.clear();
 
             const timers = this._ext.getTimers();
 
             if (timers.length === 0) {
-                this._timersSection.addMenuItem(
+                this._activeSection.addMenuItem(
                     new PopupMenu.PopupMenuItem(_('No active timers'), { reactive: false }),
                 );
 
@@ -364,15 +496,51 @@ const CountdownIndicator = GObject.registerClass(
             }
 
             for (const t of timers) {
-                const row = new TimerRow(t, {
-                    onPause: id => { this._ext.pauseTimer(id); this._rebuildRows(); },
-                    onPlay: id => { this._ext.playTimer(id); this._rebuildRows(); },
-                    onRestart: id => { this._ext.restartTimer(id); this._rebuildRows(); },
-                    onDelete: id => { this._ext.deleteTimer(id); this._rebuildRows(); },
+                const row = new ActiveTimerRow(t, {
+                    onPause: id => { this._ext.pauseTimer(id); this._rebuildActiveRows(); },
+                    onPlay: id => { this._ext.playTimer(id); this._rebuildActiveRows(); },
+                    onRestart: id => { this._ext.restartTimer(id); this._rebuildActiveRows(); },
+                    onDelete: id => { this._ext.deleteTimer(id); this._rebuildActiveRows(); },
+                    onSave: id => { this._ext.saveTimerById(id); },
                 });
 
-                this._timersSection.addMenuItem(row);
-                this._rows.set(t.id, row);
+                this._activeSection.addMenuItem(row);
+                this._activeRows.set(t.id, row);
+            }
+        }
+
+        // Saved timer presets
+        _rebuildSavedRows() {
+            this._savedSection.removeAll();
+
+            const presets = this._ext.getSavedTimers();
+
+            if (presets.length === 0) {
+                const hint = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+
+                hint.add_child(new St.Label({
+                    text: _('No saved timers yet'),
+                    style_class: 'countdown-saved-empty',
+                }));
+
+                this._savedSection.addMenuItem(hint);
+
+                return;
+            }
+
+            for (const preset of presets) {
+                const row = new SavedTimerRow(preset, {
+                    onLaunch: p => {
+                        this._ext.launchSavedTimer(p);
+                        this._rebuildActiveRows();
+                    },
+                    onDelete: id => {
+                        this._ext.deleteSavedTimer(id);
+                        // _rebuildSavedRows() is triggered via the settings signal
+                    },
+                });
+
+                this._savedSection.addMenuItem(row);
             }
         }
 
@@ -380,7 +548,7 @@ const CountdownIndicator = GObject.registerClass(
             this._ext.checkFinished();
             const timers = this._ext.getTimers();
 
-            for (const [id, row] of this._rows) {
+            for (const [id, row] of this._activeRows) {
                 const t = timers.find(x => x.id === id);
 
                 if (t) { row._timer = t; row.tick(); }
@@ -390,7 +558,7 @@ const CountdownIndicator = GObject.registerClass(
         }
 
         _onAddTimer() {
-            const raw = this._entry.get_text();
+            const raw = this._entry.get_text().trim();
             const label = this._nameEntry.get_text().trim() || null;
             const result = parseInput(raw);
 
@@ -404,8 +572,8 @@ const CountdownIndicator = GObject.registerClass(
             this._errorItem.hide();
             this._entry.set_text('');
             this._nameEntry.set_text('');
-            this._ext.addTimer(result.endEpoch, label);
-            this._rebuildRows();
+            this._ext.addTimer(result.endEpoch, label, raw, result.type);
+            this._rebuildActiveRows();
         }
 
         destroy() {
@@ -417,6 +585,11 @@ const CountdownIndicator = GObject.registerClass(
             if (this._showAllSignal) {
                 this._ext.settings.disconnect(this._showAllSignal);
                 this._showAllSignal = null;
+            }
+
+            if (this._savedSignal) {
+                this._ext.settings.disconnect(this._savedSignal);
+                this._savedSignal = null;
             }
 
             super.destroy();
@@ -439,7 +612,7 @@ export default class CountdownTimersExtension extends Extension {
         this.settings = null;
     }
 
-    // Timer state (persisted via GSettings)
+    // Active timer state (persisted via GSettings)
     getTimers() {
         const raw = this.settings.get_string('timers-json');
 
@@ -457,19 +630,25 @@ export default class CountdownTimersExtension extends Extension {
         this.settings.set_string('timers-json', JSON.stringify(timers));
     }
 
-    addTimer(endEpoch, label) {
+    /**
+     * @param {number} endEpoch - Unix timestamp when the timer expires
+     * @param {string|null} label - Optional display name
+     * @param {string|null} sourceInput - The raw input string
+     * @param {string|null} sourceType - The parsed timer type
+     */
+    addTimer(endEpoch, label, sourceInput = null, sourceType = null) {
         const now = Math.floor(Date.now() / 1000);
         const timers = this.getTimers();
-        const duration = Math.max(0, endEpoch - now);
 
         timers.push({
             id: randomId(),
             label: label || null,
+            sourceInput: sourceInput || null,
+            sourceType: sourceType || null,
             endEpoch,
             paused: false,
-            remaining: duration,
+            remaining: Math.max(0, endEpoch - now),
             finished: false,
-            duration,
         });
 
         this._saveTimers(timers);
@@ -501,25 +680,6 @@ export default class CountdownTimersExtension extends Extension {
         this._saveTimers(this.getTimers().filter(x => x.id !== id));
     }
 
-    // TODO: Restart timer
-    restartTimer(id) {
-        const timers = this.getTimers();
-        const t = timers.find(x => x.id === id);
-
-        if (t && t.finished) {
-            const now = Math.floor(Date.now() / 1000);
-            const duration = Number.isFinite(t.duration)
-                ? t.duration
-                : Math.max(0, t.endEpoch - now);
-
-            t.finished = false;
-            t.paused = false;
-            t.remaining = duration;
-            t.endEpoch = now + duration;
-            this._saveTimers(timers);
-        }
-    }
-
     checkFinished() {
         const timers = this.getTimers();
         const now = Math.floor(Date.now() / 1000);
@@ -536,6 +696,89 @@ export default class CountdownTimersExtension extends Extension {
 
         if (changed)
             this._saveTimers(timers);
+    }
+
+    // Saved timer presets
+    getSavedTimers() {
+        const raw = this.settings.get_string('saved-timers-json');
+
+        if (!raw)
+            return [];
+
+        try {
+            return JSON.parse(raw);
+        } catch {
+            return [];
+        }
+    }
+
+    _saveSavedTimers(presets) {
+        this.settings.set_string('saved-timers-json', JSON.stringify(presets));
+    }
+
+    /**
+     * Save an active timer as a preset.
+     */
+    saveTimerById(id) {
+        const t = this.getTimers().find(x => x.id === id);
+
+        if (!t || !t.sourceInput)
+            return;
+
+        const presets = this.getSavedTimers();
+
+        // Avoid exact duplicates (same input + same label)
+        const alreadyExists = presets.some(
+            p => p.input === t.sourceInput && p.label === (t.label || t.sourceInput),
+        );
+
+        if (alreadyExists)
+            return;
+
+        presets.push({
+            id: randomId(),
+            label: t.label || t.sourceInput,
+            input: t.sourceInput,
+            type: t.sourceType || 'duration',
+        });
+
+        this._saveSavedTimers(presets);
+    }
+
+    /**
+     * Add a preset directly (used from prefs or elsewhere).
+     */
+    addSavedTimer(label, input) {
+        const result = parseInput(input);
+        const presets = this.getSavedTimers();
+
+        presets.push({
+            id: randomId(),
+            label,
+            input,
+            type: result.ok ? result.type : 'duration',
+        });
+
+        this._saveSavedTimers(presets);
+    }
+
+    /**
+     * Launch a preset: parse its input and create a fresh active timer.
+     */
+    launchSavedTimer(preset) {
+        const result = parseInput(preset.input);
+
+        if (!result.ok) {
+            console.warn(`CountdownTimers: saved preset "${preset.label}" has invalid input: ${preset.input}`);
+
+            return;
+        }
+
+        this.addTimer(result.endEpoch, preset.label, preset.input, result.type);
+    }
+
+    deleteSavedTimer(id) {
+        this._saveSavedTimers(this.getSavedTimers().filter(x => x.id !== id));
     }
 
     // Alarm
@@ -558,6 +801,7 @@ export default class CountdownTimersExtension extends Extension {
 
                         return;
                     } catch {
+                        // try next
                         console.warn('Can\'t play user configured sound. Trying next one.');
                     }
                 }
@@ -581,6 +825,7 @@ export default class CountdownTimersExtension extends Extension {
 
                     return;
                 } catch {
+                    // try next
                     console.warn('Can\'t play system sound. Trying next one.');
                 }
             }
